@@ -30,27 +30,21 @@ namespace SonarLint.VisualStudio.Integration.Suppression
 {
     public sealed class SonarQubeIssuesProvider : ISonarQubeIssuesProvider, IDisposable
     {
-        private const double MillisecondsToWaitBetweenRefresh = 1000 * 60 * 1; // 1 minute
+        private const double MillisecondsToWaitBetweenRefresh = 1000 * 60 * 10; // 10 minutes
 
         private readonly ITimer refreshTimer;
-        private readonly IActiveSolutionBoundTracker solutionBoundTacker;
         private readonly ISonarQubeService sonarQubeService;
+        private readonly string boundProjectKey;
 
         private IList<SonarQubeIssue> cachedSuppressedIssues;
         private bool isDisposed;
         private CancellationTokenSource cancellationTokenSource;
 
-        public SonarQubeIssuesProvider(ISonarQubeService sonarQubeService, 
-            IActiveSolutionBoundTracker solutionBoundTracker,
-            ITimerFactory timerFactory)
+        public SonarQubeIssuesProvider(ISonarQubeService sonarQubeService, ITimerFactory timerFactory, string boundProjectKey)
         {
             if (sonarQubeService == null)
             {
                 throw new ArgumentNullException(nameof(sonarQubeService));
-            }
-            if (solutionBoundTracker == null)
-            {
-                throw new ArgumentNullException(nameof(solutionBoundTracker));
             }
             if (timerFactory == null)
             {
@@ -58,19 +52,16 @@ namespace SonarLint.VisualStudio.Integration.Suppression
             }
 
             this.sonarQubeService = sonarQubeService;
-            this.solutionBoundTacker = solutionBoundTracker;
-            this.solutionBoundTacker.SolutionBindingChanged += OnSolutionBoundChanged;
+            this.boundProjectKey = boundProjectKey;
 
-            refreshTimer = timerFactory.Create();
-            refreshTimer.AutoReset = true;
-            refreshTimer.Interval = MillisecondsToWaitBetweenRefresh;
-            refreshTimer.Elapsed += OnRefreshTimerElapsed;
+            this.refreshTimer = timerFactory.Create();
+            this.refreshTimer.AutoReset = true;
+            this.refreshTimer.Interval = MillisecondsToWaitBetweenRefresh;
+            this.refreshTimer.Elapsed += OnRefreshTimerElapsed;
 
-            if (this.solutionBoundTacker.IsActiveSolutionBound)
-            {
-                SynchronizeSuppressedIssues();
-                refreshTimer.Start();
-            }
+            SynchronizeSuppressedIssues();
+
+            this.refreshTimer.Start();
         }
 
         public void Dispose()
@@ -80,8 +71,8 @@ namespace SonarLint.VisualStudio.Integration.Suppression
                 return;
             }
 
+            refreshTimer.Elapsed -= OnRefreshTimerElapsed;
             refreshTimer.Dispose();
-            this.solutionBoundTacker.SolutionBindingChanged -= OnSolutionBoundChanged;
             this.isDisposed = true;
         }
 
@@ -90,8 +81,7 @@ namespace SonarLint.VisualStudio.Integration.Suppression
             // TODO: Block the call while the cache is being built + handle multi-threading
 
             // TODO: ensure we've got data to enable end to end testing
-            if (solutionBoundTacker.IsActiveSolutionBound &&
-                this.cachedSuppressedIssues == null)
+            if (this.cachedSuppressedIssues == null)
             {
                 SynchronizeSuppressedIssues().Wait(30000);
             }
@@ -101,14 +91,11 @@ namespace SonarLint.VisualStudio.Integration.Suppression
                 return Enumerable.Empty<SonarQubeIssue>();
             }
 
+            var moduleKey = $"{this.boundProjectKey}:{this.boundProjectKey}:{projectGuid}";
+
             return this.cachedSuppressedIssues.Where(x =>
                 x.FilePath.Equals(filePath, StringComparison.OrdinalIgnoreCase) &&
-                x.ModuleKey.Equals(BuildModuleKey(projectGuid), StringComparison.OrdinalIgnoreCase));
-        }
-
-        private string BuildModuleKey(string projectGuid)
-        {
-            return $"{solutionBoundTacker.ProjectKey}:{solutionBoundTacker.ProjectKey}:{projectGuid}";
+                x.ModuleKey.Equals(moduleKey, StringComparison.OrdinalIgnoreCase));
         }
 
         private async void OnRefreshTimerElapsed(object sender, TimerEventArgs e)
@@ -116,23 +103,8 @@ namespace SonarLint.VisualStudio.Integration.Suppression
             await SynchronizeSuppressedIssues();
         }
 
-        private async void OnSolutionBoundChanged(object sender, ActiveSolutionBindingEventArgs eventArgs)
-        {
-            if (solutionBoundTacker.IsActiveSolutionBound)
-            {
-                await SynchronizeSuppressedIssues();
-                refreshTimer.Start();
-            }
-            else
-            {
-                cachedSuppressedIssues = null;
-                refreshTimer.Stop();
-            }
-        }
-
         private async Task SynchronizeSuppressedIssues()
         {
-            // TODO: may not be connected
             if (!this.sonarQubeService.IsConnected)
             {
                 return;
@@ -142,8 +114,8 @@ namespace SonarLint.VisualStudio.Integration.Suppression
             cancellationTokenSource = new CancellationTokenSource();
 
             // TODO: Handle race conditions
-            this.cachedSuppressedIssues = await this.sonarQubeService.GetSuppressedIssuesAsync(
-                this.solutionBoundTacker.ProjectKey, cancellationTokenSource.Token);
+            this.cachedSuppressedIssues = await this.sonarQubeService.GetSuppressedIssuesAsync(this.boundProjectKey,
+                cancellationTokenSource.Token);
         }
     }
 }

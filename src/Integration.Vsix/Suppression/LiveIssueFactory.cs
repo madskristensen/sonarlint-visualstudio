@@ -23,7 +23,6 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using Microsoft.CodeAnalysis;
 using Microsoft.VisualStudio;
-using Microsoft.VisualStudio.ComponentModelHost;
 using Microsoft.VisualStudio.LanguageServices;
 using Microsoft.VisualStudio.Shell.Interop;
 using SonarLint.VisualStudio.Integration.Vsix.Helpers;
@@ -47,22 +46,16 @@ namespace SonarLint.VisualStudio.Integration.Vsix.Suppression
     /// </summary>
     internal sealed class LiveIssueFactory
     {
-        private readonly Workspace workspace;
-        private readonly IServiceProvider serviceProvider;
-
         /// <summary>
         /// Mapping from full project file path to the unique project id
         /// </summary>
-        private Dictionary<string, string> projectPathToProjectIdMap;
+        private readonly Dictionary<string, string> projectPathToProjectIdMap;
+        private readonly Solution currentSolution;
 
-        public LiveIssueFactory(IServiceProvider serviceProvider)
+        public LiveIssueFactory(IVsSolution solution, VisualStudioWorkspace workspace)
         {
-            this.serviceProvider = serviceProvider;
-
-            var componentModel = (IComponentModel)serviceProvider.GetService(typeof(SComponentModel));
-            workspace = componentModel.GetService<VisualStudioWorkspace>();
-
-            BuildProjectPathToIdMap();
+            currentSolution = workspace?.CurrentSolution;
+            projectPathToProjectIdMap = BuildProjectPathToIdMap(solution);
         }
 
         /// <summary>
@@ -84,7 +77,7 @@ namespace SonarLint.VisualStudio.Integration.Vsix.Suppression
                 return null;
             }
 
-            Project project = workspace?.CurrentSolution?.GetDocument(tree)?.Project;
+            Project project = currentSolution?.GetDocument(tree)?.Project;
             if (project == null)
             {
                 return null;
@@ -111,12 +104,9 @@ namespace SonarLint.VisualStudio.Integration.Vsix.Suppression
             return liveIssue;
         }
 
-        private void BuildProjectPathToIdMap()
+        private static Dictionary<string, string> BuildProjectPathToIdMap(IVsSolution solution)
         {
-            projectPathToProjectIdMap = new Dictionary<string, string>(StringComparer.InvariantCultureIgnoreCase);
-
-            IVsSolution solution = this.serviceProvider.GetService<SVsSolution, IVsSolution>();
-            Debug.Assert(solution != null, "Cannot find SVsSolution");
+            var map = new Dictionary<string, string>(StringComparer.InvariantCultureIgnoreCase);
 
             // 1. Call with nulls to get the number of files
             const uint grfGetOpsIncludeUnloadedFiles = 0; // required since the projects might not have finished loading
@@ -124,7 +114,7 @@ namespace SonarLint.VisualStudio.Integration.Vsix.Suppression
             var result = solution.GetProjectFilesInSolution(grfGetOpsIncludeUnloadedFiles, 0, null, out fileCount);
             if (ErrorHandler.Failed(result))
             {
-                return;
+                return map;
             }
 
             // 2. Size array and call again to get the data
@@ -132,11 +122,10 @@ namespace SonarLint.VisualStudio.Integration.Vsix.Suppression
             result = solution.GetProjectFilesInSolution(grfGetOpsIncludeUnloadedFiles, fileCount, fileNames, out fileCount);
             if (ErrorHandler.Failed(result))
             {
-                return;
+                return map;
             }
 
             IVsSolution5 soln5 = (IVsSolution5)solution;
-
             foreach (string projectFile in fileNames)
             {
                 // We need to use the same project id that is used by the Scanner for MSBuild.
@@ -147,8 +136,10 @@ namespace SonarLint.VisualStudio.Integration.Vsix.Suppression
                 Guid projectId = soln5.GetGuidOfProjectFile(projectFile);
                 Debug.Assert(projectId != null, "Not expecting VS to return a null project guid");
 
-                projectPathToProjectIdMap.Add(projectFile, projectId.ToString().Replace("{", "").Replace("}", ""));
+                map.Add(projectFile, projectId.ToString().Replace("{", "").Replace("}", ""));
             }
+
+            return map;
         }
     }
 }

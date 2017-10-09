@@ -21,6 +21,9 @@
 using System;
 using System.Linq;
 using Microsoft.CodeAnalysis;
+using Microsoft.VisualStudio.ComponentModelHost;
+using Microsoft.VisualStudio.LanguageServices;
+using Microsoft.VisualStudio.Shell.Interop;
 using SonarLint.VisualStudio.Integration.Suppression;
 using SonarQube.Client.Services;
 
@@ -36,6 +39,7 @@ namespace SonarLint.VisualStudio.Integration.Vsix.Suppression
         private DelegateInjector delegateInjector;
         private LiveIssueFactory liveIssueFactory;
         private ISonarQubeIssuesProvider sonarqubeIssueProvider;
+        private bool disposedValue;
 
         public SuppressionManager(IServiceProvider serviceProvider, ITimerFactory timerFactory)
         {
@@ -49,6 +53,18 @@ namespace SonarLint.VisualStudio.Integration.Vsix.Suppression
             this.timerFactory = timerFactory;
 
             RefreshSuppresionHandling();
+        }
+
+        public void Dispose()
+        {
+            if (disposedValue)
+            {
+                return;
+            }
+
+            CleanupSuppressionHandling();
+            activeSolutionBoundTracker.SolutionBindingChanged -= OnSolutionBindingChanged;
+            disposedValue = true;
         }
 
         private void RefreshSuppresionHandling()
@@ -65,9 +81,14 @@ namespace SonarLint.VisualStudio.Integration.Vsix.Suppression
 
         private void SetupSuppressionHandling()
         {
-            liveIssueFactory = new LiveIssueFactory(serviceProvider);
-            delegateInjector = new DelegateInjector(ShouldIssueBeReported, serviceProvider);
-            sonarqubeIssueProvider = new SonarQubeIssuesProvider(sonarQubeService, activeSolutionBoundTracker, timerFactory);
+            var componentModel = (IComponentModel)this.serviceProvider.GetService(typeof(SComponentModel));
+            var workspace = componentModel.GetService<VisualStudioWorkspace>();
+            var solution = this.serviceProvider.GetService<SVsSolution, IVsSolution>();
+
+            liveIssueFactory = new LiveIssueFactory(solution, workspace);
+            delegateInjector = new DelegateInjector(ShouldIssueBeReported, this.serviceProvider);
+            sonarqubeIssueProvider = new SonarQubeIssuesProvider(sonarQubeService, timerFactory,
+                this.activeSolutionBoundTracker.ProjectKey);
         }
 
         private void CleanupSuppressionHandling()
@@ -117,28 +138,5 @@ namespace SonarLint.VisualStudio.Integration.Vsix.Suppression
                     StringComparer.Ordinal.Equals(liveIssue.LineHash, i.Hash));
             return !matchFound;
         }
-
-        #region IDisposable Support
-        private bool disposedValue = false; // To detect redundant calls
-
-        private void Dispose(bool disposing)
-        {
-            if (!disposedValue)
-            {
-                if (disposing)
-                {
-                    CleanupSuppressionHandling();
-                    activeSolutionBoundTracker.SolutionBindingChanged -= OnSolutionBindingChanged;
-                }
-
-                disposedValue = true;
-            }
-        }
-
-        public void Dispose()
-        {
-            Dispose(true);
-        }
-        #endregion
     }
 }

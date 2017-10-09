@@ -27,7 +27,7 @@ using Microsoft.CodeAnalysis;
  * setting the static property on the version referenced by the VSIX won't work (both analyzer
  * assemblies will be loaded in memory, each with its own static class + property).
  * We need to set the static property for each Sonar analyzer assembly that is loaded.
- * 
+ *
  * Version-compatibility: the NuGet package and VSIX might reference different versions of Roslyn etc,git branch
  * but we need to be able to assign a delegate from the VSIX to the NuGet static property.
  * If the NuGet package is using a higher version of Roslyn then the analyzer won't work anyway.
@@ -112,22 +112,15 @@ SonarQube issues that have been suppressed in SonarQube may still be reported in
         #region IDisposable Support
         private bool disposedValue = false; // To detect redundant calls
 
-        void Dispose(bool disposing)
-        {
-            if (!disposedValue)
-            {
-                if (disposing)
-                {
-                    AppDomain.CurrentDomain.AssemblyLoad -= OnAssemblyLoad;
-                }
-
-                disposedValue = true;
-            }
-        }
-
         public void Dispose()
         {
-            Dispose(true);
+            if (disposedValue)
+            {
+                return;
+            }
+
+            AppDomain.CurrentDomain.AssemblyLoad -= OnAssemblyLoad;
+            disposedValue = true;
         }
         #endregion
     }
